@@ -238,9 +238,56 @@ func (dev *Device) SendFeatureReport(b []byte) (int, error) {
 	return written, nil
 }
 
+func (dev *Device) SetNonBlocking(block bool) (int, error) {
+
+	// Abort if device closed in between
+	dev.lock.Lock()
+	device := dev.device
+	dev.lock.Unlock()
+
+	if device == nil {
+		return 0, ErrDeviceClosed
+	}
+
+	blocking := 0
+	if block {
+		blocking = 1
+	}
+
+	ret := int(C.hid_set_nonblocking(device, C.int(blocking)))
+	if ret == -1 {
+		// If the result failed, verify if closed or other error
+		dev.lock.Lock()
+		device = dev.device
+		dev.lock.Unlock()
+
+		if device == nil {
+			return 0, ErrDeviceClosed
+		}
+
+		// Device not closed, some other error occurred
+		message := C.hid_error(device)
+		if message == nil {
+			return 0, errors.New("hidapi: unknown failure")
+		}
+
+		failure, _ := wcharTToString(message)
+
+		return 0, errors.New("hidapi: " + failure)
+	}
+
+	return ret, nil
+}
+
 // Read retrieves an input report from a HID device.
 func (dev *Device) Read(b []byte) (int, error) {
-	// Aborth if nothing to read
+	return dev.ReadTimeout(b, 0)
+}
+
+// ReadTimeout retrieves an input report from a HID device with a timeout. If timeout is 0 a
+// blocking read is performed.
+func (dev *Device) ReadTimeout(b []byte, timeout int) (int, error) {
+	// Abort if nothing to read
 	if len(b) == 0 {
 		return 0, nil
 	}
@@ -253,7 +300,7 @@ func (dev *Device) Read(b []byte) (int, error) {
 		return 0, ErrDeviceClosed
 	}
 	// Execute the read operation
-	read := int(C.hid_read(device, (*C.uchar)(&b[0]), C.size_t(len(b))))
+	read := int(C.hid_read_timeout(device, (*C.uchar)(&b[0]), C.size_t(len(b)), C.int(timeout)))
 	if read == -1 {
 		// If the read failed, verify if closed or other error
 		dev.lock.Lock()
